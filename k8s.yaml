@@ -1,0 +1,72 @@
+# ------------------- REDIS -------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  ports:
+    - port: 6379
+  selector:
+    app: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:alpine
+        ports:
+        - containerPort: 6379
+# ---------------- WEBHOOK SINK ----------------
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-sink
+  labels:
+    app: webhook-sink
+spec:
+  type: LoadBalancer # Exposes the service externally using a cloud provider's load balancer
+  ports:
+    - port: 80
+      targetPort: 3001
+  selector:
+    app: webhook-sink
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-sink
+spec:
+  replicas: 2 # Running two instances for high availability
+  selector:
+    matchLabels:
+      app: webhook-sink
+  template:
+    metadata:
+      labels:
+        app: webhook-sink
+    spec:
+      containers:
+      - name: webhook-sink
+        image: ghcr.io/pankajkpal/webhook-server/webhook-sink:main
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3001
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379"
+        - name: NODE_ENV
+          value: "production"
