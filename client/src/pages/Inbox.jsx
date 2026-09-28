@@ -14,7 +14,8 @@ import {
   Clock, 
   Terminal, 
   X,
-  Code2
+  Code2,
+  Zap
 } from 'lucide-react';
 import JsonResponseConfigurator from '../components/JsonResponseConfigurator';
 
@@ -33,6 +34,8 @@ export default function Inbox() {
   const [editJson, setEditJson] = useState('{\n  "status": "success"\n}');
   const [editStatusCode, setEditStatusCode] = useState(200);
   const [editDelayMs, setEditDelayMs] = useState(0);
+  const [editRateLimitPerSecond, setEditRateLimitPerSecond] = useState(0);
+  const [editRetryAfterSeconds, setEditRetryAfterSeconds] = useState(20);
   const [isJsonInvalid, setIsJsonInvalid] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -48,6 +51,8 @@ export default function Inbox() {
           setEditMethod(data.method || 'POST');
           setEditStatusCode(parseInt(data.responseStatusCode, 10) || 200);
           setEditDelayMs(parseInt(data.responseDelayMs, 10) || 0);
+          setEditRateLimitPerSecond(parseInt(data.rateLimitPerSecond, 10) || 0);
+          setEditRetryAfterSeconds(parseInt(data.retryAfterSeconds, 10) || 20);
           try {
             const parsed = JSON.parse(data.responseStructure || '{"status":"success"}');
             setEditJson(JSON.stringify(parsed, null, 2));
@@ -103,6 +108,8 @@ export default function Inbox() {
       setEditMethod(inbox.method || 'POST');
       setEditStatusCode(parseInt(inbox.responseStatusCode, 10) || 200);
       setEditDelayMs(parseInt(inbox.responseDelayMs, 10) || 0);
+      setEditRateLimitPerSecond(parseInt(inbox.rateLimitPerSecond, 10) || 0);
+      setEditRetryAfterSeconds(parseInt(inbox.retryAfterSeconds, 10) || 20);
       try {
         const parsed = JSON.parse(inbox.responseStructure || '{"status":"success"}');
         setEditJson(JSON.stringify(parsed, null, 2));
@@ -138,7 +145,9 @@ export default function Inbox() {
           method: editMethod,
           responseStructure: parsed,
           responseStatusCode: Number(editStatusCode),
-          responseDelayMs: Number(editDelayMs)
+          responseDelayMs: Number(editDelayMs),
+          rateLimitPerSecond: Number(editRateLimitPerSecond) || 0,
+          retryAfterSeconds: Number(editRetryAfterSeconds) || 20
         })
       });
 
@@ -169,6 +178,8 @@ export default function Inbox() {
 
   const delayNum = parseInt(inbox.responseDelayMs, 10) || 0;
   const statusNum = inbox.responseStatusCode || '200';
+  const rateLimitNum = parseInt(inbox.rateLimitPerSecond, 10) || 0;
+  const retryAfterNum = parseInt(inbox.retryAfterSeconds, 10) || 20;
 
   // Generate test curl command
   const curlMethod = inbox.method === 'ANY' ? 'POST' : inbox.method;
@@ -203,7 +214,7 @@ export default function Inbox() {
             className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer border border-gray-200"
           >
             <Settings size={15} />
-            Configure Response & Delay
+            Configure Response & Rules
           </button>
         </div>
         
@@ -253,7 +264,7 @@ export default function Inbox() {
             {delayNum > 0 ? (
               <span className="text-xs px-2.5 py-1 rounded-md font-mono font-bold bg-amber-50 text-amber-800 border border-amber-300 flex items-center gap-1.5 animate-pulse">
                 <Clock size={13} className="text-amber-600" />
-                Delay: {delayNum >= 1000 ? `${(delayNum / 1000).toFixed(1)}s` : `${delayNum}ms`} (Timeout simulation)
+                Delay: {delayNum >= 1000 ? `${(delayNum / 1000).toFixed(1)}s` : `${delayNum}ms`}
               </span>
             ) : (
               <span className="text-xs px-2.5 py-1 rounded-md font-mono font-medium bg-gray-100 text-gray-600 border border-gray-200 flex items-center gap-1">
@@ -261,8 +272,27 @@ export default function Inbox() {
                 Instant (0ms)
               </span>
             )}
+            {rateLimitNum > 0 && (
+              <span className="text-xs px-2.5 py-1 rounded-md font-mono font-bold bg-orange-50 text-orange-800 border border-orange-300 flex items-center gap-1.5">
+                <Zap size={13} className="text-orange-600" />
+                Rate Limit: {rateLimitNum}/s (429 @ {retryAfterNum}s)
+              </span>
+            )}
           </div>
         </div>
+
+        {/* Rate Limiting notice if configured */}
+        {rateLimitNum > 0 && (
+          <div className="bg-orange-50/90 border border-orange-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-orange-950">
+            <Zap size={16} className="text-orange-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Simulated Rate Limiting is Active ({rateLimitNum} requests/second)</p>
+              <p className="text-orange-800 text-[11px] mt-0.5">
+                Requests exceeding <strong>{rateLimitNum} req/s</strong> will be rejected with HTTP <strong>429 Too Many Requests</strong> and a <code>Retry-After: {retryAfterNum}</code> header (resend time: {retryAfterNum}s) to test client rate limit and backoff retry logic.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Delay notice if configured */}
         {delayNum > 0 && (
@@ -353,12 +383,20 @@ export default function Inbox() {
             {messages.map((msg) => (
               <div 
                 key={msg.id} 
-                className={`bg-white rounded-xl shadow-xs border-l-4 overflow-hidden transition-all hover:shadow-md ${msg.status === 'SUCCESS' ? 'border-l-green-500' : 'border-l-red-500'}`}
+                className={`bg-white rounded-xl shadow-xs border-l-4 overflow-hidden transition-all hover:shadow-md ${
+                  msg.status === 'SUCCESS' 
+                    ? 'border-l-green-500' 
+                    : msg.status === 'RATE_LIMITED' 
+                    ? 'border-l-orange-500' 
+                    : 'border-l-red-500'
+                }`}
               >
                 <div className="p-4 border-b border-gray-50 flex flex-wrap justify-between items-center bg-gray-50/50 gap-2">
                   <div className="flex items-center gap-3">
                     {msg.status === 'SUCCESS' ? (
                       <CheckCircle className="text-green-500" size={20} />
+                    ) : msg.status === 'RATE_LIMITED' ? (
+                      <Zap className="text-orange-500" size={20} />
                     ) : (
                       <XCircle className="text-red-500" size={20} />
                     )}
@@ -377,12 +415,29 @@ export default function Inbox() {
                         Delayed: {msg.delayMs >= 1000 ? `${(msg.delayMs / 1000).toFixed(1)}s` : `${msg.delayMs}ms`}
                       </span>
                     )}
-                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${msg.status === 'SUCCESS' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      {msg.status}
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                      msg.status === 'SUCCESS' 
+                        ? 'bg-green-100 text-green-700' 
+                        : msg.status === 'RATE_LIMITED'
+                        ? 'bg-orange-100 text-orange-800'
+                        : 'bg-red-100 text-red-700'
+                    }`}>
+                      {msg.status === 'RATE_LIMITED' ? '429 RATE LIMITED' : msg.status}
                     </span>
                   </div>
                 </div>
                 
+                {msg.status === 'RATE_LIMITED' && msg.errors?.length > 0 && (
+                  <div className="px-4 py-3 bg-orange-50 border-b border-orange-100">
+                    <p className="text-xs font-bold text-orange-900 mb-1 uppercase tracking-wider flex items-center gap-1">
+                      <Zap size={13} className="text-orange-600" /> 429 Too Many Requests (Rate Limit Triggered):
+                    </p>
+                    <ul className="list-disc list-inside text-sm text-orange-800">
+                      {msg.errors.map((err, i) => <li key={i}>{err}</li>)}
+                    </ul>
+                  </div>
+                )}
+
                 {msg.status === 'FAILED' && msg.errors?.length > 0 && (
                   <div className="px-4 py-3 bg-red-50 border-b border-red-100">
                     <p className="text-xs font-bold text-red-800 mb-1 uppercase tracking-wider">Validation Errors:</p>
@@ -459,6 +514,10 @@ export default function Inbox() {
                   onChangeStatusCode={setEditStatusCode}
                   delayMs={editDelayMs}
                   onChangeDelayMs={setEditDelayMs}
+                  rateLimitPerSecond={editRateLimitPerSecond}
+                  onChangeRateLimitPerSecond={setEditRateLimitPerSecond}
+                  retryAfterSeconds={editRetryAfterSeconds}
+                  onChangeRetryAfterSeconds={setEditRetryAfterSeconds}
                   onErrorChange={setIsJsonInvalid}
                 />
               </div>

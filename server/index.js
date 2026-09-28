@@ -66,7 +66,9 @@ app.post('/api/inboxes', async (req, res) => {
       auth = null, 
       responseStructure = { status: 'success' },
       responseStatusCode = 200,
-      responseDelayMs = 0
+      responseDelayMs = 0,
+      rateLimitPerSecond = 0,
+      retryAfterSeconds = 20
     } = req.body;
     
     const uuid = uuidv4();
@@ -93,6 +95,8 @@ app.post('/api/inboxes', async (req, res) => {
       responseStructure: serializedResponse,
       responseStatusCode: String(responseStatusCode || 200),
       responseDelayMs: String(Math.max(0, parseInt(responseDelayMs, 10) || 0)),
+      rateLimitPerSecond: String(Math.max(0, parseInt(rateLimitPerSecond, 10) || 0)),
+      retryAfterSeconds: String(Math.max(1, parseInt(retryAfterSeconds, 10) || 20)),
       createdAt: Date.now().toString()
     };
     
@@ -122,7 +126,9 @@ app.put('/api/inboxes/:uuid', async (req, res) => {
       auth, 
       responseStructure,
       responseStatusCode,
-      responseDelayMs
+      responseDelayMs,
+      rateLimitPerSecond,
+      retryAfterSeconds
     } = req.body;
 
     const updates = {};
@@ -148,6 +154,12 @@ app.put('/api/inboxes/:uuid', async (req, res) => {
     }
     if (responseDelayMs !== undefined) {
       updates.responseDelayMs = String(Math.max(0, parseInt(responseDelayMs, 10) || 0));
+    }
+    if (rateLimitPerSecond !== undefined) {
+      updates.rateLimitPerSecond = String(Math.max(0, parseInt(rateLimitPerSecond, 10) || 0));
+    }
+    if (retryAfterSeconds !== undefined) {
+      updates.retryAfterSeconds = String(Math.max(1, parseInt(retryAfterSeconds, 10) || 20));
     }
 
     if (Object.keys(updates).length > 0) {
@@ -273,6 +285,28 @@ app.all('/webhook/:uuid', async (req, res) => {
       }
     }
 
+    // Check Rate Limiting (Limit per second)
+    const rateLimit = parseInt(inbox.rateLimitPerSecond, 10) || 0;
+    const retryAfter = parseInt(inbox.retryAfterSeconds, 10) || 20;
+    let isRateLimited = false;
+
+    if (rateLimit > 0) {
+      const currentSec = Math.floor(Date.now() / 1000);
+      const rlKey = `ratelimit:${uuid}:${currentSec}`;
+      const count = await client.incr(rlKey);
+      if (count === 1) {
+        await client.expire(rlKey, 2);
+      }
+      if (count > rateLimit) {
+        isRateLimited = true;
+      }
+    }
+
+    if (isRateLimited) {
+      receivedMsg.status = 'RATE_LIMITED';
+      receivedMsg.errors.push(`Rate limit exceeded (${rateLimit} req/sec). Retry-After: ${retryAfter}s`);
+    }
+
     await client.lPush(`messages:${uuid}`, JSON.stringify(receivedMsg));
     await client.lTrim(`messages:${uuid}`, 0, 99);
     
@@ -281,6 +315,16 @@ app.all('/webhook/:uuid', async (req, res) => {
     // If wait milliseconds configured, wait before sending response (timeout simulation)
     if (delayMs > 0) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    if (isRateLimited) {
+      res.setHeader('Retry-After', String(retryAfter));
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(429).json({
+        error: 'Too Many Requests',
+        message: `Rate limit of ${rateLimit} req/sec exceeded. Please try again in ${retryAfter} seconds.`,
+        retryAfter: retryAfter
+      });
     }
 
     if (receivedMsg.status === 'FAILED') {

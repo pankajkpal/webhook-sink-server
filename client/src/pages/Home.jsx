@@ -1,7 +1,67 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, List, ArrowRight, X, Trash2, Clock } from 'lucide-react';
+import { Plus, List, ArrowRight, X, Trash2, Clock, Zap } from 'lucide-react';
 import JsonResponseConfigurator from '../components/JsonResponseConfigurator';
+
+function KeyValueBuilder({ items, setItems, label }) {
+  const addItem = () => {
+    const id = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+    setItems(prev => [...prev, { id, key: '', value: '' }]);
+  };
+
+  const updateItem = (id, field, value) => {
+    setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
+  };
+
+  const removeItem = (id) => {
+    setItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  return (
+    <div className="mb-4">
+      <div className="flex justify-between items-center mb-1">
+        <label className="block text-sm font-medium text-gray-700">{label}</label>
+        <button 
+          type="button" 
+          onClick={addItem}
+          className="text-blue-600 hover:bg-blue-50 p-1 rounded-md transition-colors cursor-pointer"
+        >
+          <Plus size={16} />
+        </button>
+      </div>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item.id} className="flex items-center gap-2">
+            <input 
+              type="text" 
+              placeholder="Key" 
+              value={item.key}
+              onChange={(e) => updateItem(item.id, 'key', e.target.value)}
+              className="w-1/2 border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-hidden text-sm font-mono"
+            />
+            <input 
+              type="text" 
+              placeholder="Value" 
+              value={item.value}
+              onChange={(e) => updateItem(item.id, 'value', e.target.value)}
+              className="w-1/2 border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-hidden text-sm font-mono"
+            />
+            <button 
+              type="button" 
+              onClick={() => removeItem(item.id)}
+              className="text-gray-400 hover:text-red-500 p-1 rounded-md transition-colors cursor-pointer"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ))}
+        {items.length === 0 && (
+          <div className="text-xs text-gray-400 italic">No {label.toLowerCase()} added.</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   const [inboxes, setInboxes] = useState([]);
@@ -16,6 +76,8 @@ export default function Home() {
   const [responseJson, setResponseJson] = useState('{\n  "status": "success"\n}');
   const [responseStatusCode, setResponseStatusCode] = useState(200);
   const [responseDelayMs, setResponseDelayMs] = useState(0);
+  const [rateLimitPerSecond, setRateLimitPerSecond] = useState(0);
+  const [retryAfterSeconds, setRetryAfterSeconds] = useState(20);
   const [isJsonInvalid, setIsJsonInvalid] = useState(false);
 
   useEffect(() => {
@@ -81,7 +143,9 @@ export default function Home() {
         queryParams: queryParamsObj,
         responseStructure: parsedResponse,
         responseStatusCode: Number(responseStatusCode) || 200,
-        responseDelayMs: Number(responseDelayMs) || 0
+        responseDelayMs: Number(responseDelayMs) || 0,
+        rateLimitPerSecond: Number(rateLimitPerSecond) || 0,
+        retryAfterSeconds: Number(retryAfterSeconds) || 20
       };
       
       const res = await fetch('/api/inboxes', {
@@ -100,61 +164,6 @@ export default function Home() {
       console.error(err);
       alert('Error creating inbox: ' + err.message);
     }
-  };
-
-  const KeyValueBuilder = ({ items, setItems, label }) => {
-    const addItem = () => setItems([...items, { key: '', value: '' }]);
-    const updateItem = (index, field, value) => {
-      const newItems = [...items];
-      newItems[index][field] = value;
-      setItems(newItems);
-    };
-    const removeItem = (index) => setItems(items.filter((_, i) => i !== index));
-
-    return (
-      <div className="mb-4">
-        <div className="flex justify-between items-center mb-1">
-          <label className="block text-sm font-medium text-gray-700">{label}</label>
-          <button 
-            type="button" 
-            onClick={addItem}
-            className="text-blue-600 hover:bg-blue-50 p-1 rounded transition-colors"
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-        <div className="space-y-2">
-          {items.map((item, index) => (
-            <div key={index} className="flex items-center gap-2">
-              <input 
-                type="text" 
-                placeholder="Key" 
-                value={item.key}
-                onChange={(e) => updateItem(index, 'key', e.target.value)}
-                className="w-1/2 border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-mono"
-              />
-              <input 
-                type="text" 
-                placeholder="Value" 
-                value={item.value}
-                onChange={(e) => updateItem(index, 'value', e.target.value)}
-                className="w-1/2 border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-mono"
-              />
-              <button 
-                type="button" 
-                onClick={() => removeItem(index)}
-                className="text-gray-400 hover:text-red-500 p-1 transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
-          ))}
-          {items.length === 0 && (
-            <div className="text-xs text-gray-400 italic">No {label.toLowerCase()} added.</div>
-          )}
-        </div>
-      </div>
-    );
   };
 
   return (
@@ -187,6 +196,8 @@ export default function Home() {
           }
           const delayNum = parseInt(inbox.responseDelayMs, 10) || 0;
           const statusNum = inbox.responseStatusCode || '200';
+          const rateLimitNum = parseInt(inbox.rateLimitPerSecond, 10) || 0;
+          const retryAfterNum = parseInt(inbox.retryAfterSeconds, 10) || 20;
 
           return (
             <div 
@@ -205,7 +216,7 @@ export default function Home() {
                     type="button"
                     onClick={(e) => handleDeleteInbox(inbox.uuid, e)}
                     title="Delete Inbox"
-                    className="text-gray-300 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                    className="text-gray-300 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -222,6 +233,12 @@ export default function Home() {
                     <span className="bg-amber-50 text-amber-800 border border-amber-200 text-xs px-2 py-0.5 rounded-md font-mono font-medium flex items-center gap-1">
                       <Clock size={11} className="text-amber-600" />
                       {delayNum >= 1000 ? `${(delayNum / 1000).toFixed(1)}s` : `${delayNum}ms`} delay
+                    </span>
+                  )}
+                  {rateLimitNum > 0 && (
+                    <span className="bg-orange-50 text-orange-800 border border-orange-200 text-xs px-2 py-0.5 rounded-md font-mono font-medium flex items-center gap-1">
+                      <Zap size={11} className="text-orange-600" />
+                      {rateLimitNum}/s (429 @ {retryAfterNum}s)
                     </span>
                   )}
                 </div>
@@ -311,6 +328,10 @@ export default function Home() {
                   onChangeStatusCode={setResponseStatusCode}
                   delayMs={responseDelayMs}
                   onChangeDelayMs={setResponseDelayMs}
+                  rateLimitPerSecond={rateLimitPerSecond}
+                  onChangeRateLimitPerSecond={setRateLimitPerSecond}
+                  retryAfterSeconds={retryAfterSeconds}
+                  onChangeRetryAfterSeconds={setRetryAfterSeconds}
                   onErrorChange={setIsJsonInvalid}
                 />
               </div>

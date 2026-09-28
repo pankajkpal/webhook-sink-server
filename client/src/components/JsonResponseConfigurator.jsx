@@ -10,7 +10,9 @@ import {
   Plus,
   X,
   Clock,
-  Timer
+  Timer,
+  Zap,
+  ShieldAlert
 } from 'lucide-react';
 
 const PRESETS = [
@@ -51,6 +53,24 @@ const PRESETS = [
         server: 'webhook-sink'
       }
     }
+  },
+  {
+    name: '404 Not Found',
+    code: 404,
+    json: {
+      status: 'error',
+      code: 404,
+      message: 'The requested webhook resource was not found'
+    }
+  },
+  {
+    name: '429 Rate Limit',
+    code: 429,
+    json: {
+      error: 'Too Many Requests',
+      message: 'Rate limit exceeded. Please retry after 20 seconds.',
+      retryAfter: 20
+    }
   }
 ];
 
@@ -60,6 +80,8 @@ const STATUS_CODES = [
   { code: 202, label: '202 Accepted' },
   { code: 204, label: '204 No Content' },
   { code: 400, label: '400 Bad Request' },
+  { code: 404, label: '404 Not Found' },
+  { code: 429, label: '429 Too Many Requests' },
   { code: 500, label: '500 Server Error' }
 ];
 
@@ -73,6 +95,23 @@ const DELAY_PRESETS = [
   { label: '30s (Timeout test)', value: 30000 },
 ];
 
+const RATE_LIMIT_PRESETS = [
+  { label: 'Off', value: 0 },
+  { label: '1 / sec', value: 1 },
+  { label: '2 / sec', value: 2 },
+  { label: '5 / sec', value: 5 },
+  { label: '10 / sec', value: 10 },
+  { label: '20 / sec', value: 20 },
+];
+
+const RETRY_AFTER_PRESETS = [
+  { label: '5s', value: 5 },
+  { label: '10s', value: 10 },
+  { label: '20s (Default)', value: 20 },
+  { label: '30s', value: 30 },
+  { label: '60s', value: 60 },
+];
+
 export default function JsonResponseConfigurator({
   jsonString,
   onChangeJson,
@@ -80,6 +119,10 @@ export default function JsonResponseConfigurator({
   onChangeStatusCode,
   delayMs = 0,
   onChangeDelayMs,
+  rateLimitPerSecond = 0,
+  onChangeRateLimitPerSecond,
+  retryAfterSeconds = 20,
+  onChangeRetryAfterSeconds,
   onErrorChange
 }) {
   const [activeTab, setActiveTab] = useState('json'); // 'json' | 'keyvalue'
@@ -121,6 +164,12 @@ export default function JsonResponseConfigurator({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const createKvItem = (k = '', v = '') => ({
+    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+    key: k,
+    value: v
+  });
+
   const handleApplyPreset = (preset) => {
     onChangeJson(JSON.stringify(preset.json, null, 2));
     if (onChangeStatusCode) {
@@ -129,10 +178,9 @@ export default function JsonResponseConfigurator({
     // sync key values if applicable
     if (typeof preset.json === 'object' && preset.json !== null && !Array.isArray(preset.json)) {
       setKeyValues(
-        Object.entries(preset.json).map(([k, v]) => ({
-          key: k,
-          value: typeof v === 'object' ? JSON.stringify(v) : String(v)
-        }))
+        Object.entries(preset.json).map(([k, v]) =>
+          createKvItem(k, typeof v === 'object' ? JSON.stringify(v) : String(v))
+        )
       );
     }
   };
@@ -158,10 +206,9 @@ export default function JsonResponseConfigurator({
         const parsed = JSON.parse(jsonString);
         if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
           setKeyValues(
-            Object.entries(parsed).map(([k, v]) => ({
-              key: k,
-              value: typeof v === 'object' ? JSON.stringify(v) : String(v)
-            }))
+            Object.entries(parsed).map(([k, v]) =>
+              createKvItem(k, typeof v === 'object' ? JSON.stringify(v) : String(v))
+            )
           );
         } else {
           setKeyValues([]);
@@ -188,9 +235,8 @@ export default function JsonResponseConfigurator({
     setActiveTab(tab);
   };
 
-  const updateKeyValue = (index, field, val) => {
-    const next = [...keyValues];
-    next[index][field] = val;
+  const updateKeyValue = (id, field, val) => {
+    const next = keyValues.map(item => item.id === id ? { ...item, [field]: val } : item);
     setKeyValues(next);
 
     const obj = {};
@@ -207,12 +253,11 @@ export default function JsonResponseConfigurator({
   };
 
   const addKeyValue = () => {
-    const next = [...keyValues, { key: '', value: '' }];
-    setKeyValues(next);
+    setKeyValues(prev => [...prev, createKvItem()]);
   };
 
-  const removeKeyValue = (index) => {
-    const next = keyValues.filter((_, i) => i !== index);
+  const removeKeyValue = (id) => {
+    const next = keyValues.filter((item) => item.id !== id);
     setKeyValues(next);
     const obj = {};
     next.forEach(({ key, value }) => {
@@ -325,6 +370,99 @@ export default function JsonResponseConfigurator({
         </div>
       )}
 
+      {/* Rate Limiting (Too Many Requests / 429 Simulation) */}
+      {onChangeRateLimitPerSecond && (
+        <div className="bg-orange-50/70 border border-orange-200/80 rounded-xl p-3 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-orange-950">
+              <Zap size={14} className="text-orange-600" />
+              <span>Rate Limit &amp; 429 Simulation (Too Many Requests)</span>
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-medium text-orange-800">Limit:</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="1000"
+                  value={rateLimitPerSecond}
+                  onChange={(e) => onChangeRateLimitPerSecond(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  className="w-16 bg-white border border-orange-300 rounded-md px-2 py-1 text-xs font-mono text-orange-950 font-bold text-right focus:ring-2 focus:ring-orange-500 outline-hidden"
+                  placeholder="0"
+                />
+                <span className="text-xs font-mono font-medium text-orange-800">req/s</span>
+              </div>
+
+              {onChangeRetryAfterSeconds && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-medium text-orange-800">Resend Time:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="3600"
+                    value={retryAfterSeconds}
+                    onChange={(e) => onChangeRetryAfterSeconds(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-16 bg-white border border-orange-300 rounded-md px-2 py-1 text-xs font-mono text-orange-950 font-bold text-right focus:ring-2 focus:ring-orange-500 outline-hidden"
+                    placeholder="20"
+                  />
+                  <span className="text-xs font-mono font-medium text-orange-800">s</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] text-orange-800/80 font-medium">Limit Presets:</span>
+              {RATE_LIMIT_PRESETS.map((r) => (
+                <button
+                  key={r.value}
+                  type="button"
+                  onClick={() => onChangeRateLimitPerSecond(r.value)}
+                  className={`text-[11px] px-2 py-0.5 rounded-md font-mono transition-all cursor-pointer ${
+                    rateLimitPerSecond === r.value
+                      ? 'bg-orange-600 text-white font-bold shadow-xs'
+                      : 'bg-white hover:bg-orange-100 text-orange-900 border border-orange-200'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+
+            {onChangeRetryAfterSeconds && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-orange-800/80 font-medium">Resend Presets:</span>
+                {RETRY_AFTER_PRESETS.map((ra) => (
+                  <button
+                    key={ra.value}
+                    type="button"
+                    onClick={() => onChangeRetryAfterSeconds(ra.value)}
+                    className={`text-[11px] px-2 py-0.5 rounded-md font-mono transition-all cursor-pointer ${
+                      retryAfterSeconds === ra.value
+                        ? 'bg-orange-600 text-white font-bold shadow-xs'
+                        : 'bg-white hover:bg-orange-100 text-orange-900 border border-orange-200'
+                    }`}
+                  >
+                    {ra.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {rateLimitPerSecond > 0 && (
+            <p className="text-[11px] text-orange-900 flex items-center gap-1.5 pt-0.5 border-t border-orange-200/60">
+              <ShieldAlert size={13} className="shrink-0 text-orange-600" />
+              <span>
+                Requests exceeding <strong>{rateLimitPerSecond} req/s</strong> return <strong>429 Too Many Requests</strong> with header <code>Retry-After: {retryAfterSeconds}</code> (resend time: {retryAfterSeconds}s).
+              </span>
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Quick Preset Chips */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider flex items-center gap-1">
@@ -429,25 +567,25 @@ export default function JsonResponseConfigurator({
             </button>
           </div>
 
-          {keyValues.map((item, index) => (
-            <div key={index} className="flex items-center gap-2">
+          {keyValues.map((item) => (
+            <div key={item.id} className="flex items-center gap-2">
               <input
                 type="text"
                 placeholder="Field (e.g. status)"
                 value={item.key}
-                onChange={(e) => updateKeyValue(index, 'key', e.target.value)}
+                onChange={(e) => updateKeyValue(item.id, 'key', e.target.value)}
                 className="w-1/2 border border-gray-300 bg-white rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-hidden text-xs font-mono"
               />
               <input
                 type="text"
                 placeholder="Value (e.g. success or 123)"
                 value={item.value}
-                onChange={(e) => updateKeyValue(index, 'value', e.target.value)}
+                onChange={(e) => updateKeyValue(item.id, 'value', e.target.value)}
                 className="w-1/2 border border-gray-300 bg-white rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-hidden text-xs font-mono"
               />
               <button
                 type="button"
-                onClick={() => removeKeyValue(index)}
+                onClick={() => removeKeyValue(item.id)}
                 className="text-gray-400 hover:text-red-500 p-1.5 transition-colors"
                 title="Remove"
               >
