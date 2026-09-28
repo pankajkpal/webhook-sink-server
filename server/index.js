@@ -31,6 +31,10 @@ const io = new Server(server, {
 });
 
 app.use(cors());
+
+// Webhook endpoints: buffer raw payload of any type to prevent SyntaxError crashes from body-parser
+app.use('/webhook', express.raw({ type: '*/*', limit: '10mb' }));
+
 app.use(express.json());
 const path = require('path');
 app.use(express.urlencoded({ extended: true }));
@@ -241,12 +245,46 @@ app.all('/webhook/:uuid', async (req, res) => {
     const inbox = await client.hGetAll(`inbox:${uuid}`);
     
     if (!inbox || !inbox.uuid) {
+      res.setHeader('Content-Type', 'application/json');
       return res.status(404).json({ error: 'Inbox not found' });
     }
     
-    let parsedBody = req.body;
+    let rawStr = '';
     if (Buffer.isBuffer(req.body)) {
-        parsedBody = req.body.toString('utf-8');
+      rawStr = req.body.toString('utf-8');
+    } else if (typeof req.body === 'string') {
+      rawStr = req.body;
+    } else if (req.body && typeof req.body === 'object') {
+      rawStr = JSON.stringify(req.body);
+    }
+
+    let parsedBody = rawStr;
+    const contentType = (req.headers['content-type'] || '').toLowerCase();
+
+    // Gracefully parse JSON if content-type contains json or payload appears to be JSON
+    if (contentType.includes('json') || rawStr.trim().startsWith('{') || rawStr.trim().startsWith('[')) {
+      let candidate = rawStr.trim();
+
+      // Auto-heal payload if wrapped in quotes (common when curl is executed in Windows CMD or PowerShell)
+      if (
+        (candidate.startsWith("'") && candidate.endsWith("'")) ||
+        (candidate.startsWith('"') && candidate.endsWith('"') && candidate.length > 2)
+      ) {
+        const unwrapped = candidate.slice(1, -1).trim();
+        if (
+          (unwrapped.startsWith('{') && unwrapped.endsWith('}')) ||
+          (unwrapped.startsWith('[') && unwrapped.endsWith(']'))
+        ) {
+          candidate = unwrapped;
+        }
+      }
+
+      try {
+        parsedBody = JSON.parse(candidate);
+      } catch {
+        // Fallback: If not valid strict JSON, preserve raw string so webhook is never lost
+        parsedBody = rawStr;
+      }
     }
 
     const delayMs = Math.max(0, parseInt(inbox.responseDelayMs, 10) || 0);
@@ -328,6 +366,7 @@ app.all('/webhook/:uuid', async (req, res) => {
     }
 
     if (receivedMsg.status === 'FAILED') {
+      res.setHeader('Content-Type', 'application/json');
       return res.status(400).json({ 
         error: 'Webhook validation failed', 
         details: receivedMsg.errors 
@@ -351,12 +390,27 @@ app.all('/webhook/:uuid', async (req, res) => {
 
   } catch (err) {
     logger.error(`Error processing webhook for ${req.params.uuid}:`, err);
+    res.setHeader('Content-Type', 'application/json');
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+});
+
+// Global error handler ensuring all error responses set Content-Type: application/json
+app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+  logger.error('Unhandled server error:', err);
+  res.setHeader('Content-Type', 'application/json');
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    error: err.name || 'Error',
+    message: err.message || 'Internal Server Error'
+  });
 });
 
 const PORT = process.env.PORT || 3001;
