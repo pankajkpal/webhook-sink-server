@@ -64,19 +64,35 @@ app.post('/api/inboxes', async (req, res) => {
       headers = {}, 
       queryParams = {}, 
       auth = null, 
-      responseStructure = { status: 'success' } 
+      responseStructure = { status: 'success' },
+      responseStatusCode = 200,
+      responseDelayMs = 0
     } = req.body;
     
     const uuid = uuidv4();
+    
+    let serializedResponse;
+    if (typeof responseStructure === 'string') {
+      try {
+        JSON.parse(responseStructure);
+        serializedResponse = responseStructure;
+      } catch {
+        serializedResponse = JSON.stringify({ status: 'success' });
+      }
+    } else {
+      serializedResponse = JSON.stringify(responseStructure !== undefined ? responseStructure : { status: 'success' });
+    }
     
     const inbox = {
       uuid,
       name: name || `Inbox-${uuid.substring(0, 5)}`,
       method: method.toUpperCase(),
-      headers: JSON.stringify(headers),
-      queryParams: JSON.stringify(queryParams),
-      auth: JSON.stringify(auth),
-      responseStructure: JSON.stringify(responseStructure),
+      headers: typeof headers === 'string' ? headers : JSON.stringify(headers || {}),
+      queryParams: typeof queryParams === 'string' ? queryParams : JSON.stringify(queryParams || {}),
+      auth: typeof auth === 'string' ? auth : JSON.stringify(auth),
+      responseStructure: serializedResponse,
+      responseStatusCode: String(responseStatusCode || 200),
+      responseDelayMs: String(Math.max(0, parseInt(responseDelayMs, 10) || 0)),
       createdAt: Date.now().toString()
     };
     
@@ -86,6 +102,75 @@ app.post('/api/inboxes', async (req, res) => {
     res.status(201).json(inbox);
   } catch (err) {
     logger.error('Error creating inbox:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.put('/api/inboxes/:uuid', async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    const existingInbox = await client.hGetAll(`inbox:${uuid}`);
+    if (!existingInbox || !existingInbox.uuid) {
+      return res.status(404).json({ error: 'Inbox not found' });
+    }
+
+    const { 
+      name, 
+      method, 
+      headers, 
+      queryParams, 
+      auth, 
+      responseStructure,
+      responseStatusCode,
+      responseDelayMs
+    } = req.body;
+
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (method !== undefined) updates.method = method.toUpperCase();
+    if (headers !== undefined) updates.headers = typeof headers === 'string' ? headers : JSON.stringify(headers);
+    if (queryParams !== undefined) updates.queryParams = typeof queryParams === 'string' ? queryParams : JSON.stringify(queryParams);
+    if (auth !== undefined) updates.auth = typeof auth === 'string' ? auth : JSON.stringify(auth);
+    if (responseStructure !== undefined) {
+      if (typeof responseStructure === 'string') {
+        try {
+          JSON.parse(responseStructure);
+          updates.responseStructure = responseStructure;
+        } catch {
+          return res.status(400).json({ error: 'Invalid JSON for responseStructure' });
+        }
+      } else {
+        updates.responseStructure = JSON.stringify(responseStructure);
+      }
+    }
+    if (responseStatusCode !== undefined) {
+      updates.responseStatusCode = String(responseStatusCode);
+    }
+    if (responseDelayMs !== undefined) {
+      updates.responseDelayMs = String(Math.max(0, parseInt(responseDelayMs, 10) || 0));
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await client.hSet(`inbox:${uuid}`, updates);
+    }
+
+    const updated = await client.hGetAll(`inbox:${uuid}`);
+    res.json(updated);
+  } catch (err) {
+    logger.error(`Error updating inbox ${req.params.uuid}:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.delete('/api/inboxes/:uuid', async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    await client.del(`inbox:${uuid}`);
+    await client.del(`messages:${uuid}`);
+    await client.zRem('inboxes', uuid);
+    res.json({ success: true, message: 'Inbox deleted' });
+  } catch (err) {
+    logger.error(`Error deleting inbox ${req.params.uuid}:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -152,6 +237,8 @@ app.all('/webhook/:uuid', async (req, res) => {
         parsedBody = req.body.toString('utf-8');
     }
 
+    const delayMs = Math.max(0, parseInt(inbox.responseDelayMs, 10) || 0);
+
     const receivedMsg = {
       id: uuidv4(),
       method: req.method,
@@ -160,7 +247,8 @@ app.all('/webhook/:uuid', async (req, res) => {
       body: parsedBody,
       receivedAt: Date.now(),
       status: 'SUCCESS',
-      errors: []
+      errors: [],
+      delayMs
     };
 
     const expectedMethod = inbox.method;
@@ -190,6 +278,11 @@ app.all('/webhook/:uuid', async (req, res) => {
     
     io.to(uuid).emit('newMessage', receivedMsg);
 
+    // If wait milliseconds configured, wait before sending response (timeout simulation)
+    if (delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
     if (receivedMsg.status === 'FAILED') {
       return res.status(400).json({ 
         error: 'Webhook validation failed', 
@@ -197,8 +290,20 @@ app.all('/webhook/:uuid', async (req, res) => {
       });
     }
 
-    const responseStructure = JSON.parse(inbox.responseStructure || '{"status":"success"}');
-    res.status(200).json(responseStructure);
+    const statusCode = parseInt(inbox.responseStatusCode, 10) || 200;
+    let responseStructure;
+    try {
+      responseStructure = JSON.parse(inbox.responseStructure || '{"status":"success"}');
+    } catch {
+      responseStructure = { status: 'success' };
+    }
+
+    if (statusCode === 204) {
+      return res.status(204).end();
+    }
+
+    res.setHeader('Content-Type', 'application/json');
+    res.status(statusCode).json(responseStructure);
 
   } catch (err) {
     logger.error(`Error processing webhook for ${req.params.uuid}:`, err);

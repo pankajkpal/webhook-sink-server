@@ -38,7 +38,7 @@ metadata:
   labels:
     app: webhook-sink
 spec:
-  type: LoadBalancer # Exposes the service externally using a cloud provider's load balancer
+  
   ports:
     - port: 80
       targetPort: 3001
