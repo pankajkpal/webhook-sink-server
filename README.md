@@ -8,10 +8,13 @@
 
 ## 🚀 Features
 
-- **Real-Time Feed:** See incoming webhooks appear instantly without refreshing, powered by Socket.io.
+- **Real-Time Feed:** See incoming webhooks appear instantly without refreshing, powered by Socket.io (stores up to 200 events per inbox).
+- **Clear Feed on Demand:** Easily clear the event feed of any inbox at any time with a single click, synchronized in real time.
+- **Random 500 Internal Server Error (Chaos Testing):** Toggleable checkbox simulation that randomly returns HTTP `500 Internal Server Error` with `{"error": "Internal Server Error", "message": "Internal Server Error"}` to test client fault tolerance and retry logic.
 - **Dynamic Validation:** Enforce specific HTTP Methods, Query Parameters, and Headers. Invalid webhooks are flagged and rejected with a `400 Bad Request`, but still logged for debugging.
 - **Custom Responses with Raw JSON:** Configure custom JSON response payloads (with syntax validation, indentation formatting, and status code selection) returned to webhook senders.
 - **Latency & Timeout Simulation:** Configure wait milliseconds (`delayMs`) before sending the HTTP response to simulate network latency, delayed processing, or client timeout thresholds (e.g. 5s, 30s).
+- **Rate Limit & 429 Simulation:** Configure per-second rate limits and custom retry-after times.
 - **Robust Logging:** Built-in Winston and Morgan logging for deep server-side HTTP request and error tracking (`server.log` and `error.log`).
 - **High Performance:** Uses Redis for lightning-fast memory storage of configurations and incoming payloads.
 

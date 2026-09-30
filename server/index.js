@@ -72,7 +72,8 @@ app.post('/api/inboxes', async (req, res) => {
       responseStatusCode = 200,
       responseDelayMs = 0,
       rateLimitPerSecond = 0,
-      retryAfterSeconds = 20
+      retryAfterSeconds = 20,
+      randomErrorEnabled = false
     } = req.body;
     
     const uuid = uuidv4();
@@ -101,6 +102,7 @@ app.post('/api/inboxes', async (req, res) => {
       responseDelayMs: String(Math.max(0, parseInt(responseDelayMs, 10) || 0)),
       rateLimitPerSecond: String(Math.max(0, parseInt(rateLimitPerSecond, 10) || 0)),
       retryAfterSeconds: String(Math.max(1, parseInt(retryAfterSeconds, 10) || 20)),
+      randomErrorEnabled: String(randomErrorEnabled === true || randomErrorEnabled === 'true'),
       createdAt: Date.now().toString()
     };
     
@@ -132,7 +134,8 @@ app.put('/api/inboxes/:uuid', async (req, res) => {
       responseStatusCode,
       responseDelayMs,
       rateLimitPerSecond,
-      retryAfterSeconds
+      retryAfterSeconds,
+      randomErrorEnabled
     } = req.body;
 
     const updates = {};
@@ -164,6 +167,9 @@ app.put('/api/inboxes/:uuid', async (req, res) => {
     }
     if (retryAfterSeconds !== undefined) {
       updates.retryAfterSeconds = String(Math.max(1, parseInt(retryAfterSeconds, 10) || 20));
+    }
+    if (randomErrorEnabled !== undefined) {
+      updates.randomErrorEnabled = String(randomErrorEnabled === true || randomErrorEnabled === 'true');
     }
 
     if (Object.keys(updates).length > 0) {
@@ -229,12 +235,30 @@ app.get('/api/inboxes/:uuid', async (req, res) => {
 app.get('/api/inboxes/:uuid/messages', async (req, res) => {
   try {
     const { uuid } = req.params;
-    const messagesStr = await client.lRange(`messages:${uuid}`, 0, 100);
+    const messagesStr = await client.lRange(`messages:${uuid}`, 0, 199);
     const messages = messagesStr.map(msg => JSON.parse(msg));
     
     res.json(messages);
   } catch (err) {
     logger.error(`Error getting messages for inbox ${req.params.uuid}:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.delete('/api/inboxes/:uuid/messages', async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    const inbox = await client.hGetAll(`inbox:${uuid}`);
+    if (!inbox || !inbox.uuid) {
+      return res.status(404).json({ error: 'Inbox not found' });
+    }
+
+    await client.del(`messages:${uuid}`);
+    io.to(uuid).emit('feedCleared');
+
+    res.json({ success: true, message: 'Inbox feed cleared' });
+  } catch (err) {
+    logger.error(`Error clearing messages for inbox ${req.params.uuid}:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -345,14 +369,31 @@ app.all('/webhook/:uuid', async (req, res) => {
       receivedMsg.errors.push(`Rate limit exceeded (${rateLimit} req/sec). Retry-After: ${retryAfter}s`);
     }
 
+    // Check Random 500 Simulation
+    const isRandomErrorEnabled = inbox.randomErrorEnabled === 'true';
+    const isRandom500Triggered = isRandomErrorEnabled && (Math.random() < 0.5);
+
+    if (isRandom500Triggered) {
+      receivedMsg.status = '500_ERROR';
+      receivedMsg.errors.push('Simulated random 500 Internal Server Error triggered');
+    }
+
     await client.lPush(`messages:${uuid}`, JSON.stringify(receivedMsg));
-    await client.lTrim(`messages:${uuid}`, 0, 99);
+    await client.lTrim(`messages:${uuid}`, 0, 199);
     
     io.to(uuid).emit('newMessage', receivedMsg);
 
     // If wait milliseconds configured, wait before sending response (timeout simulation)
     if (delayMs > 0) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    if (isRandom500Triggered) {
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Internal Server Error'
+      });
     }
 
     if (isRateLimited) {

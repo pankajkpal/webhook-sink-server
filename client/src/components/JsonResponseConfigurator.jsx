@@ -12,7 +12,8 @@ import {
   Clock,
   Timer,
   Zap,
-  ShieldAlert
+  ShieldAlert,
+  AlertTriangle
 } from 'lucide-react';
 
 const PRESETS = [
@@ -123,6 +124,8 @@ export default function JsonResponseConfigurator({
   onChangeRateLimitPerSecond,
   retryAfterSeconds = 20,
   onChangeRetryAfterSeconds,
+  randomErrorEnabled = false,
+  onChangeRandomErrorEnabled,
   onErrorChange
 }) {
   const [activeTab, setActiveTab] = useState('json'); // 'json' | 'keyvalue'
@@ -460,6 +463,38 @@ export default function JsonResponseConfigurator({
               </span>
             </p>
           )}
+        </div>
+      )}
+
+      {/* Random 500 Internal Server Error Simulation (Chaos Testing) */}
+      {onChangeRandomErrorEnabled && (
+        <div className={`rounded-xl p-3 border transition-all ${
+          randomErrorEnabled 
+            ? 'bg-rose-50/80 border-rose-300' 
+            : 'bg-gray-50/80 border-gray-200'
+        }`}>
+          <label className="flex items-start gap-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={randomErrorEnabled}
+              onChange={(e) => onChangeRandomErrorEnabled(e.target.checked)}
+              className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500 border-gray-300 cursor-pointer accent-rose-600"
+            />
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-900">
+                <AlertTriangle size={14} className={randomErrorEnabled ? 'text-rose-600' : 'text-gray-400'} />
+                <span>Enable Random 500 Internal Server Error responses</span>
+                {randomErrorEnabled && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 uppercase tracking-wide">
+                    Active
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">
+                When enabled, incoming requests will randomly fail with HTTP 500 and body <code className="bg-white px-1 py-0.5 rounded border border-gray-200 text-rose-600 font-mono">{`{"error":"Internal Server Error","message":"Internal Server Error"}`}</code> to simulate server faults and test error handling.
+              </p>
+            </div>
+          </label>
         </div>
       )}
 

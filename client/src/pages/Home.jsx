@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, List, ArrowRight, X, Trash2, Clock, Zap } from 'lucide-react';
+import { Plus, List, ArrowRight, X, Trash2, Clock, Zap, AlertTriangle, RotateCcw } from 'lucide-react';
 import JsonResponseConfigurator from '../components/JsonResponseConfigurator';
 
 function KeyValueBuilder({ items, setItems, label }) {
@@ -78,6 +78,7 @@ export default function Home() {
   const [responseDelayMs, setResponseDelayMs] = useState(0);
   const [rateLimitPerSecond, setRateLimitPerSecond] = useState(0);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState(20);
+  const [randomErrorEnabled, setRandomErrorEnabled] = useState(false);
   const [isJsonInvalid, setIsJsonInvalid] = useState(false);
 
   useEffect(() => {
@@ -91,6 +92,24 @@ export default function Home() {
       setInboxes(data);
     } catch (err) {
       console.error('Error fetching inboxes:', err);
+    }
+  };
+
+  const handleClearFeed = async (uuid, e) => {
+    e.stopPropagation();
+    if (!window.confirm('Are you sure you want to clear all feed messages for this inbox?')) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/inboxes/${uuid}/messages`, { method: 'DELETE' });
+      if (res.ok) {
+        alert('Inbox feed cleared successfully');
+      } else {
+        const data = await res.json();
+        alert('Failed to clear feed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Error clearing feed:', err);
     }
   };
 
@@ -145,7 +164,8 @@ export default function Home() {
         responseStatusCode: Number(responseStatusCode) || 200,
         responseDelayMs: Number(responseDelayMs) || 0,
         rateLimitPerSecond: Number(rateLimitPerSecond) || 0,
-        retryAfterSeconds: Number(retryAfterSeconds) || 20
+        retryAfterSeconds: Number(retryAfterSeconds) || 20,
+        randomErrorEnabled: Boolean(randomErrorEnabled)
       };
       
       const res = await fetch('/api/inboxes', {
@@ -166,6 +186,20 @@ export default function Home() {
     }
   };
 
+  const handleOpenCreateModal = () => {
+    setName('');
+    setMethod('POST');
+    setHeaders([]);
+    setQueryParams([]);
+    setResponseJson('{\n  "status": "success"\n}');
+    setResponseStatusCode(200);
+    setResponseDelayMs(0);
+    setRateLimitPerSecond(0);
+    setRetryAfterSeconds(20);
+    setRandomErrorEnabled(false);
+    setIsModalOpen(true);
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-100">
@@ -177,7 +211,7 @@ export default function Home() {
           <p className="text-gray-500 text-sm mt-1">Manage and monitor incoming webhooks in real-time.</p>
         </div>
         <button 
-          onClick={() => setIsModalOpen(true)}
+          onClick={handleOpenCreateModal}
           className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 transition-all shadow-md hover:shadow-lg active:scale-95 cursor-pointer"
         >
           <Plus size={20} />
@@ -212,14 +246,24 @@ export default function Home() {
                   <h3 className="font-bold text-lg text-gray-800 group-hover:text-blue-600 transition-colors truncate pr-2">
                     {inbox.name}
                   </h3>
-                  <button
-                    type="button"
-                    onClick={(e) => handleDeleteInbox(inbox.uuid, e)}
-                    title="Delete Inbox"
-                    className="text-gray-300 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      type="button"
+                      onClick={(e) => handleClearFeed(inbox.uuid, e)}
+                      title="Clear Messages Feed"
+                      className="text-gray-400 hover:text-amber-600 p-1 rounded-md hover:bg-amber-50 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteInbox(inbox.uuid, e)}
+                      title="Delete Inbox"
+                      className="text-gray-400 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5 mb-3">
@@ -239,6 +283,12 @@ export default function Home() {
                     <span className="bg-orange-50 text-orange-800 border border-orange-200 text-xs px-2 py-0.5 rounded-md font-mono font-medium flex items-center gap-1">
                       <Zap size={11} className="text-orange-600" />
                       {rateLimitNum}/s (429 @ {retryAfterNum}s)
+                    </span>
+                  )}
+                  {inbox.randomErrorEnabled === 'true' && (
+                    <span className="bg-rose-50 text-rose-700 border border-rose-200 text-xs px-2 py-0.5 rounded-md font-mono font-medium flex items-center gap-1">
+                      <AlertTriangle size={11} className="text-rose-600" />
+                      Random 500
                     </span>
                   )}
                 </div>
@@ -332,6 +382,8 @@ export default function Home() {
                   onChangeRateLimitPerSecond={setRateLimitPerSecond}
                   retryAfterSeconds={retryAfterSeconds}
                   onChangeRetryAfterSeconds={setRetryAfterSeconds}
+                  randomErrorEnabled={randomErrorEnabled}
+                  onChangeRandomErrorEnabled={setRandomErrorEnabled}
                   onErrorChange={setIsJsonInvalid}
                 />
               </div>

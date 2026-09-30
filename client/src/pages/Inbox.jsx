@@ -15,7 +15,9 @@ import {
   Terminal, 
   X,
   Code2,
-  Zap
+  Zap,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import JsonResponseConfigurator from '../components/JsonResponseConfigurator';
 
@@ -27,6 +29,7 @@ export default function Inbox() {
   const [copiedCurl, setCopiedCurl] = useState(false);
   const [copiedResponse, setCopiedResponse] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [isClearingFeed, setIsClearingFeed] = useState(false);
 
   // Edit Modal State
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -36,10 +39,53 @@ export default function Inbox() {
   const [editDelayMs, setEditDelayMs] = useState(0);
   const [editRateLimitPerSecond, setEditRateLimitPerSecond] = useState(0);
   const [editRetryAfterSeconds, setEditRetryAfterSeconds] = useState(20);
+  const [editRandomErrorEnabled, setEditRandomErrorEnabled] = useState(false);
   const [isJsonInvalid, setIsJsonInvalid] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const webhookUrl = `${window.location.origin}/webhook/${uuid}`;
+
+  const handleClearFeed = async () => {
+    if (!window.confirm('Are you sure you want to clear all feed events for this inbox?')) {
+      return;
+    }
+    try {
+      setIsClearingFeed(true);
+      const res = await fetch(`/api/inboxes/${uuid}/messages`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setMessages([]);
+      } else {
+        const data = await res.json();
+        alert('Failed to clear feed: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Error clearing feed:', err);
+      alert('Error clearing feed: ' + err.message);
+    } finally {
+      setIsClearingFeed(false);
+    }
+  };
+
+  const handleToggleRandomError = async () => {
+    if (!inbox) return;
+    const nextState = !(inbox.randomErrorEnabled === 'true');
+    try {
+      const res = await fetch(`/api/inboxes/${uuid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ randomErrorEnabled: nextState })
+      });
+      const updated = await res.json();
+      if (res.ok) {
+        setInbox(updated);
+        setEditRandomErrorEnabled(updated.randomErrorEnabled === 'true');
+      }
+    } catch (err) {
+      console.error('Error toggling random 500 error:', err);
+    }
+  };
 
   useEffect(() => {
     // Fetch inbox details and history
@@ -53,6 +99,7 @@ export default function Inbox() {
           setEditDelayMs(parseInt(data.responseDelayMs, 10) || 0);
           setEditRateLimitPerSecond(parseInt(data.rateLimitPerSecond, 10) || 0);
           setEditRetryAfterSeconds(parseInt(data.retryAfterSeconds, 10) || 20);
+          setEditRandomErrorEnabled(data.randomErrorEnabled === 'true' || data.randomErrorEnabled === true);
           try {
             const parsed = JSON.parse(data.responseStructure || '{"status":"success"}');
             setEditJson(JSON.stringify(parsed, null, 2));
@@ -78,8 +125,12 @@ export default function Inbox() {
 
     socket.on('disconnect', () => setIsConnected(false));
 
+    socket.on('feedCleared', () => {
+      setMessages([]);
+    });
+
     socket.on('newMessage', (msg) => {
-      setMessages(prev => [msg, ...prev]);
+      setMessages(prev => [msg, ...prev].slice(0, 200));
     });
 
     return () => socket.disconnect();
@@ -110,6 +161,7 @@ export default function Inbox() {
       setEditDelayMs(parseInt(inbox.responseDelayMs, 10) || 0);
       setEditRateLimitPerSecond(parseInt(inbox.rateLimitPerSecond, 10) || 0);
       setEditRetryAfterSeconds(parseInt(inbox.retryAfterSeconds, 10) || 20);
+      setEditRandomErrorEnabled(inbox.randomErrorEnabled === 'true' || inbox.randomErrorEnabled === true);
       try {
         const parsed = JSON.parse(inbox.responseStructure || '{"status":"success"}');
         setEditJson(JSON.stringify(parsed, null, 2));
@@ -147,7 +199,8 @@ export default function Inbox() {
           responseStatusCode: Number(editStatusCode),
           responseDelayMs: Number(editDelayMs),
           rateLimitPerSecond: Number(editRateLimitPerSecond) || 0,
-          retryAfterSeconds: Number(editRetryAfterSeconds) || 20
+          retryAfterSeconds: Number(editRetryAfterSeconds) || 20,
+          randomErrorEnabled: Boolean(editRandomErrorEnabled)
         })
       });
 
@@ -278,8 +331,38 @@ export default function Inbox() {
                 Rate Limit: {rateLimitNum}/s (429 @ {retryAfterNum}s)
               </span>
             )}
+            <label 
+              className={`text-xs px-2.5 py-1 rounded-md font-mono font-bold border flex items-center gap-1.5 cursor-pointer transition-all select-none ${
+                inbox.randomErrorEnabled === 'true'
+                  ? 'bg-rose-50 text-rose-800 border-rose-300 shadow-xs'
+                  : 'bg-gray-100 text-gray-500 border-gray-200 hover:border-gray-300'
+              }`}
+              title="Click checkbox to enable/disable Random 500 Internal Server Error"
+            >
+              <input
+                type="checkbox"
+                checked={inbox.randomErrorEnabled === 'true'}
+                onChange={handleToggleRandomError}
+                className="w-3.5 h-3.5 rounded text-rose-600 focus:ring-rose-500 border-gray-300 cursor-pointer accent-rose-600"
+              />
+              <AlertTriangle size={13} className={inbox.randomErrorEnabled === 'true' ? 'text-rose-600' : 'text-gray-400'} />
+              <span>Random 500: {inbox.randomErrorEnabled === 'true' ? 'Active' : 'Off'}</span>
+            </label>
           </div>
         </div>
+
+        {/* Random 500 Error notice if active */}
+        {inbox.randomErrorEnabled === 'true' && (
+          <div className="bg-rose-50/90 border border-rose-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-rose-950">
+            <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Simulated Random 500 Internal Server Error is Active</p>
+              <p className="text-rose-800 text-[11px] mt-0.5">
+                Incoming requests to this webhook will randomly return HTTP <strong>500 Internal Server Error</strong> with body <code>{`{"error":"Internal Server Error","message":"Internal Server Error"}`}</code> to simulate intermittent server faults.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Rate Limiting notice if configured */}
         {rateLimitNum > 0 && (
@@ -360,14 +443,27 @@ export default function Inbox() {
 
       {/* Messages Feed */}
       <div>
-        <div className="flex items-center justify-between mb-4 px-1">
+        <div className="flex flex-wrap items-center justify-between mb-4 px-1 gap-2">
           <h3 className="text-lg font-semibold flex items-center gap-2">
             <Activity className="text-gray-400" />
             Live Event Feed
           </h3>
-          <span className="text-xs text-gray-500 bg-white px-2.5 py-1 rounded-md shadow-xs border border-gray-100 font-mono font-medium">
-            Showing last {messages.length} events
-          </span>
+          <div className="flex items-center gap-2.5">
+            <span className="text-xs text-gray-500 bg-white px-2.5 py-1 rounded-md shadow-xs border border-gray-100 font-mono font-medium">
+              Showing last {messages.length} events (max 200)
+            </span>
+            {messages.length > 0 && (
+              <button
+                onClick={handleClearFeed}
+                disabled={isClearingFeed}
+                className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 px-3 py-1 rounded-md text-xs font-semibold transition-all border border-red-200 cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
+                title="Clear all events from this inbox feed"
+              >
+                <Trash2 size={13} />
+                {isClearingFeed ? 'Clearing...' : 'Clear Feed'}
+              </button>
+            )}
+          </div>
         </div>
 
         {messages.length === 0 ? (
@@ -388,6 +484,8 @@ export default function Inbox() {
                     ? 'border-l-green-500' 
                     : msg.status === 'RATE_LIMITED' 
                     ? 'border-l-orange-500' 
+                    : msg.status === '500_ERROR'
+                    ? 'border-l-rose-500'
                     : 'border-l-red-500'
                 }`}
               >
@@ -397,6 +495,8 @@ export default function Inbox() {
                       <CheckCircle className="text-green-500" size={20} />
                     ) : msg.status === 'RATE_LIMITED' ? (
                       <Zap className="text-orange-500" size={20} />
+                    ) : msg.status === '500_ERROR' ? (
+                      <AlertTriangle className="text-rose-500" size={20} />
                     ) : (
                       <XCircle className="text-red-500" size={20} />
                     )}
@@ -420,13 +520,26 @@ export default function Inbox() {
                         ? 'bg-green-100 text-green-700' 
                         : msg.status === 'RATE_LIMITED'
                         ? 'bg-orange-100 text-orange-800'
+                        : msg.status === '500_ERROR'
+                        ? 'bg-rose-100 text-rose-800'
                         : 'bg-red-100 text-red-700'
                     }`}>
-                      {msg.status === 'RATE_LIMITED' ? '429 RATE LIMITED' : msg.status}
+                      {msg.status === 'RATE_LIMITED' ? '429 RATE LIMITED' : msg.status === '500_ERROR' ? '500 INTERNAL ERROR' : msg.status}
                     </span>
                   </div>
                 </div>
                 
+                {msg.status === '500_ERROR' && (
+                  <div className="px-4 py-3 bg-rose-50 border-b border-rose-100">
+                    <p className="text-xs font-bold text-rose-900 mb-1 uppercase tracking-wider flex items-center gap-1">
+                      <AlertTriangle size={13} className="text-rose-600" /> 500 Internal Server Error (Simulated Fault):
+                    </p>
+                    <p className="text-sm text-rose-800">
+                      Simulated random server crash triggered. Webhook responded with HTTP 500 Internal Server Error: <code className="bg-white px-1.5 py-0.5 rounded border border-rose-200 text-rose-700 font-mono text-xs">{`{"error":"Internal Server Error","message":"Internal Server Error"}`}</code>
+                    </p>
+                  </div>
+                )}
+
                 {msg.status === 'RATE_LIMITED' && msg.errors?.length > 0 && (
                   <div className="px-4 py-3 bg-orange-50 border-b border-orange-100">
                     <p className="text-xs font-bold text-orange-900 mb-1 uppercase tracking-wider flex items-center gap-1">
@@ -518,6 +631,8 @@ export default function Inbox() {
                   onChangeRateLimitPerSecond={setEditRateLimitPerSecond}
                   retryAfterSeconds={editRetryAfterSeconds}
                   onChangeRetryAfterSeconds={setEditRetryAfterSeconds}
+                  randomErrorEnabled={editRandomErrorEnabled}
+                  onChangeRandomErrorEnabled={setEditRandomErrorEnabled}
                   onErrorChange={setIsJsonInvalid}
                 />
               </div>
